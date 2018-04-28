@@ -1,0 +1,95 @@
+---
+title: "Moorea Bleaching - May 2016 - Nutrients"
+author: "Tom Adam, Deron Burkepile, Mary Donovan, et al"
+date: "4/27/2018"
+output: 
+  rmarkdown::html_document:
+    theme: sandstone
+    highlight: tango
+    toc: true
+    toc_depth: 2
+    toc_float: true
+---
+
+Write something introducing the project...  
+
+## Initialization
+```{r initialization, echo=TRUE, warning=FALSE}
+rm(list=ls())
+home <- getwd()
+
+library(tidyverse)
+library(mgcv)
+library(MuMIn)
+```
+  
+## Data import and setup
+```{r data import and setup}
+data <- read.csv(file.path(home,'data','Poc_Acrop_bleaching_all_data_wTemp.csv'))
+source('myplotcorr.R')
+
+data <- rename(data, dist_crest=Distsance.to.crest)
+data <- rename(data, dist_shore=Distance_to_shore)
+data <- rename(data, dist_pass=Distance_to_pass)
+data <- rename(data, dist_deep=Distance_to_deep_lagoon_water)
+data <- rename(data, dist_pop=Distance_to_population_center)
+data <- rename(data, tot_N=Total..N)
+data <- rename(data, d15N=d15NNorm..)
+
+# levels incorrect for bleaching column
+data$Bleached[data$Bleached==''] <- NA
+data$Bleached <- as.character(data$Bleached); data$Bleached <- as.factor(data$Bleached)
+levels(data$Bleached)
+data$bleach.z <- 0
+data$bleach.z[data$Bleached=='Y'] <- 1
+data$bleach.z[data$Bleached=='N'] <- 0
+
+## points 20 and 85 are missing nutrient data - Tom to check
+```
+
+
+## Correlations among variables
+```{r correlations}
+# set up color ramp
+colsc=c(rgb(241, 54, 23, maxColorValue=255), 'white', rgb(0, 61, 104, maxColorValue=255))
+colramp = colorRampPalette(colsc, space='Lab')
+colorrs = colramp(100)
+# save correlations
+mycorgo <- cor(data[c('Depth_m',"dist_crest","dist_shore","dist_pass","dist_deep","dist_pop","Mean_wave_power","SD_wave_power","tot_N" ,"d15N","cumstress")],use='pairwise.complete.obs')
+#plot
+my.plotcorr(mycorgo, col=colorrs[((mycorgo + 1)/2) * 100], diag='ellipse', main='', upper.panel="number", mar=c(0,0,0,0),cex=0.5)
+
+```
+  
+Distance to crest and distance to shore are correlated (rho=`r round(cor(data[c('dist_crest','dist_shore')])[2],2)`), so we are going to use distance to crest only. Distance to pass and distance to deep lagoon water are also correlated (rho=`r round(cor(data[c('dist_pass','dist_deep')])[2],2)`), so we are going to use distance to pass in the model.
+
+## Center continuous explanatory data
+```{r}
+c.vars <- data[c('Depth_m',"dist_crest","dist_shore","dist_pass","dist_deep","dist_pop","Mean_wave_power","SD_wave_power","tot_N" ,"d15N","cumstress")]
+c.vars.s <- c.vars
+for(i in 1:length(c.vars)) c.vars.s[i] <- scale(c.vars[i][,1])
+colnames(c.vars.s) <- paste(colnames(c.vars),'.s',sep='')
+data <- cbind(data, c.vars.s)
+```
+
+## Construct full GAMM model
+```{r}
+dat <- data[data$Taxa=='Pocillopora',]
+dat <- dat[!is.na(dat$bleach.z),]
+dat <- dat[!is.na(dat$tot_N),]
+dat <- dat[!is.na(dat$Depth_m),]
+gam.poc <- gamm(bleach.z ~ s(Depth_m.s,k=4) + s(dist_crest.s,k=4) + s(dist_pass.s,k=4) + s(dist_pop.s,k=4) + Mean_wave_power.s + SD_wave_power.s + s(cumstress.s,k=4) + s(tot_N.s,k=4) + s(d15N.s, k=4),random=list(Habitat=~1), family='binomial', data=data[data$Taxa=='Pocillopora',], niterPQL=100)
+
+gam.poc <- bam(bleach.z ~ s(Depth_m.s,k=4) + s(dist_crest.s,k=4) + s(dist_pass.s,k=4) + s(dist_pop.s,k=4) + Mean_wave_power.s + SD_wave_power.s + s(cumstress.s,k=4) + s(tot_N.s,k=4) + s(d15N.s, k=4) + s(Habitat,by=Island_shore,bs='re') + s(Point,bs='re'), family='binomial', data=dat, na.action='na.fail')
+summary(gam.poc)
+```
+
+Model improvements to do:  
+- add spatial autocorrelation --- AND/OR deal with the hierarchical aspects???
+- include colony size
+
+## Model selection
+```{r}
+gam.poc.dredge <- dredge(gam.poc)
+```
+
